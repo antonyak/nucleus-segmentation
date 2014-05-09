@@ -18,7 +18,10 @@ package pkg_PlugInNucleus;
 import ij.*;
 import ij.gui.GenericDialog;
 import ij.gui.Roi;
+import ij.measure.Measurements;
+import ij.measure.ResultsTable;
 import ij.plugin.PlugIn;
+import ij.plugin.filter.ParticleAnalyzer;
 
 public class PlugInNucleus implements PlugIn
 {
@@ -89,7 +92,9 @@ public class PlugInNucleus implements PlugIn
 		bin_min = gd.getNextNumber();
 		bin_max = gd.getNextNumber();
 		
-		// Main process
+		double pixelsPerSlice = 1;
+		
+		// Segmentation
 		
 		// Given ImagePlus (image or stack)
 		ImagePlus img = WindowManager.getCurrentImage();
@@ -154,19 +159,7 @@ public class PlugInNucleus implements PlugIn
 			imgtmp.close();
 			imgtmp = WindowManager.getImage("Segmentation progress of "+imgslcseg.getTitle());	
 			imgtmp.changes = false;
-			imgtmp.close();
-			
-			/*
-			// Address each seed point if needed
-			PointRoi proi = (PointRoi)roisp;
-			Roi roinuc = new Roi(0, 0, imgbin);
-			for(int i=0; i<proi.getXCoordinates().length; i++)
-			{
-				int x = (int)proi.getXBase() + proi.getXCoordinates()[i];
-				int y = (int)proi.getYBase() + proi.getYCoordinates()[i];
-				// Process seed point
-			}
-			*/			
+			imgtmp.close();		
 		}
 		
 		// Create nucleus segmentation binary mask image
@@ -186,6 +179,8 @@ public class PlugInNucleus implements PlugIn
 			IJ.setThreshold(imgsegbin, 128, 255, "No Update");
 			IJ.run(imgsegbin, "Convert to Mask", "method=Default background=Dark black");
 		}
+		
+		imgsegbin.changes = false; // prevents save dialog on closing
 		
 		// Use the nucleus segmentation binary mask to get
 		// - Nuclei segmented from original image
@@ -230,6 +225,47 @@ public class PlugInNucleus implements PlugIn
 		imgsegfin.show();
 		imgnucbin.show();
 		imgnucfin.show();
+		
+		// Classification
+		int measures = Measurements.AREA + Measurements.CENTROID + Measurements.CIRCULARITY;
+		int opts = ParticleAnalyzer.EXCLUDE_EDGE_PARTICLES +
+				   ParticleAnalyzer.SHOW_OUTLINES + ParticleAnalyzer.LABELS;
+		
+    	String vol_lbl = "Volume";
+    	String max_area_lbl = "Max. Area";
+    	String avg_circ_lbl = "Avg. Circularity";
+    	String max_circ_lbl = "Max. Circularity";
+
+		ResultsTable nucResults= new ResultsTable();
+
+		double min_particle_circ = 0.5;
+		double max_particle_circ = 1.0;
+		double min_particle_size = 50;
+		double max_particle_size = 999999; // maybe set to image size..
+		
+		ParticleAnalyzer nucAnalyzer = new ParticleAnalyzer(opts, measures, nucResults,
+				                                            min_particle_size, max_particle_size,
+				                                            min_particle_circ, max_particle_circ);
+		nucAnalyzer.analyze(imgsegbin);
+		
+	    // Do extra calculations on each nucleus
+		for(int n = 0; n < nucResults.getCounter(); ++n)
+		{
+			Cell_Calculator cell_calc = new Cell_Calculator(imgsegbin.getStack().getProcessor(1), imgsegbin,
+					(int)nucResults.getValue("X", n), (int)nucResults.getValue("Y", n));
+			
+			cell_calc.calc_cell_geom(pixelsPerSlice );
+			cell_calc.disp_cell_data();
+			ResultsTable calc_results = cell_calc.get_results();
+			
+			// Update the analysis results table.
+			nucResults.setValue(vol_lbl, n, calc_results.getValue(vol_lbl, 0));
+			nucResults.setValue(max_area_lbl, n, calc_results.getValue(max_area_lbl, 0));
+			nucResults.setValue(avg_circ_lbl, n, calc_results.getValue(avg_circ_lbl, 0));
+			nucResults.setValue(max_circ_lbl, n, calc_results.getValue(max_circ_lbl, 0));
+		}
+		
+		nucResults.show("Nuclei stats");	
 	}
 	
 	void ApplyMask(ImagePlus imgsrc, ImagePlus imgbin)
